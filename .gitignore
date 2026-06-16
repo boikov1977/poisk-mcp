@@ -12,9 +12,12 @@ env/
 # OS
 .DS_Store
 
-# Cache (will be auto-created)
-models/.locks/
-models/xet/
+# Model (downloaded by scripts/download_model.sh)
+models/
+
+# Cache
+.locks/
+xet/
 
 # Docker
 searxng-data/
