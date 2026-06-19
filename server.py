@@ -43,7 +43,7 @@ def setup_logging():
     root_logger.setLevel(logging.INFO)
     root_logger.handlers.clear()
     root_logger.addHandler(handler)
-    for lib in ["httpx", "httpcore", "huggingface_hub", "urllib3", "filelock", "tokenizers", "sentence_transformers"]:
+    for lib in ["httpx", "httpcore", "huggingface_hub", "urllib3", "filelock", "tokenizers", "flashrank"]:
         logging.getLogger(lib).setLevel(logging.ERROR)
     return logging.getLogger("SearchTool")
 

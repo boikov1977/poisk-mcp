@@ -1,30 +1,30 @@
 #!/usr/bin/env bash
-# ── Download sentence-transformers model ──
-# This script downloads the neural reranking model
+# ── Download FlashRank model ──
+# FlashRank автоматически скачивает ONNX-модель при первом импорте.
+# Этот скрипт — только для prefetch-кэша (опционально, можно не запускать).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
-MODEL_DIR="$REPO_DIR/models"
-MODEL_NAME="sentence-transformers/all-MiniLM-L6-v2"
+MODEL_NAME="ms-marco-MultiBERT-L-12"
 
-echo "📦 Downloading model: $MODEL_NAME"
-echo "   Target: $MODEL_DIR"
+echo "📦 Prefetching FlashRank model: $MODEL_NAME"
+echo "   ~98MB, будет загружена в HF-кэш"
 
-# Create a temporary venv just to download the model
+# Создаём временное venv для скачивания (если основного нет)
 TMP_VENV=$(mktemp -d)
 python3 -m venv "$TMP_VENV"
-"$TMP_VENV/bin/pip" install -q sentence-transformers==5.5.0 2>/dev/null
+"$TMP_VENV/bin/pip" install -q flashrank 2>/dev/null
 
-# Download model explicitly
+# Prefetch: простой импорт модели
 "$TMP_VENV/bin/python" -c "
 import os
-os.environ['TRANSFORMERS_CACHE'] = '$MODEL_DIR'
-os.environ['HUGGINGFACE_HUB_CACHE'] = '$MODEL_DIR/hub'
-from sentence_transformers import SentenceTransformer
-model = SentenceTransformer('$MODEL_NAME', cache_folder='$MODEL_DIR')
-print(f'✅ Model downloaded: {model}')
+os.environ['HF_HOME'] = '$REPO_DIR/models'
+os.environ['HUGGINGFACE_HUB_CACHE'] = '$REPO_DIR/models/hub'
+from flashrank import Ranker
+model = Ranker(model_name='$MODEL_NAME')
+print(f'✅ Model loaded: {model}')
 " 2>&1
 
 rm -rf "$TMP_VENV"
-echo "✅ Model ready at $MODEL_DIR"
+echo "✅ FlashRank model cached at $REPO_DIR/models"

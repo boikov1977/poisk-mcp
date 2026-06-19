@@ -2,16 +2,16 @@
 set -euo pipefail
 
 # ═════════════════════════════════════════════════════════════════
-#  MCP SearchTool v3.4 — Deploy Script
-#  One-command setup: SearXNG + Python venv + модель + проверка
+#  MCP SearchTool v3.5 — Deploy Script
+#  One-command setup: SearXNG + Python venv + зависимости
+#  (PyTorch не нужен — FlashRank использует ONNX Runtime)
 # ═════════════════════════════════════════════════════════════════
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 VENV_DIR="$REPO_DIR/venv"
-MODEL_DIR="$REPO_DIR/models"
 
 echo "╔══════════════════════════════════════════════════════════╗"
-echo "║  🚀 MCP SearchTool v3.4 — Deploy                        ║"
+echo "║  🚀 MCP SearchTool v3.5 — Deploy                        ║"
 echo "╚══════════════════════════════════════════════════════════╝"
 echo ""
 
@@ -72,21 +72,8 @@ fi
 # ── 4. Python dependencies ──
 echo ""
 echo "📋 Step 4/5: Python packages..."
-"$VENV_DIR/bin/pip" install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu -q
-echo "   ✅ PyTorch (CPU-only, без гигабайтов CUDA)"
 "$VENV_DIR/bin/pip" install -r "$REPO_DIR/requirements.txt" -q
-echo "   ✅ All packages installed"
-
-# ── 5. Neural model ──
-echo ""
-echo "📋 Step 5/5: Neural reranking model..."
-MODEL_CHECK="$MODEL_DIR/models--sentence-transformers--all-MiniLM-L6-v2/snapshots"
-if [ -d "$MODEL_CHECK" ] && [ "$(ls -A "$MODEL_CHECK" 2>/dev/null)" ]; then
-    echo "   ✅ Model already cached ($(du -sh "$MODEL_DIR" | cut -f1))"
-else
-    echo "   🔄 Downloading model (all-MiniLM-L6-v2, ~90MB)..."
-    bash "$REPO_DIR/scripts/download_model.sh"
-fi
+echo "   ✅ All packages installed (FlashRank сам скачает модель при первом запуске)"
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════╗"
