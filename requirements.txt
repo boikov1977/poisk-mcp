@@ -19,10 +19,12 @@ mcp==1.27.1
 sentence-transformers==5.5.0
 numpy==2.4.4
 
-# === PyTorch (CPU) ===
-torch==2.12.0
-torchaudio==2.11.0
-torchvision==0.27.0
+# === PyTorch (CPU-ONLY!) ===
+# ВАЖНО: Не добавляй torch сюда — sentence-transformers потянет его сам,
+#        но из PyPI он скачает CUDA-версию с гигабайтами nvidia-мусора.
+# Устанавливай отдельно через CPU-индекс:
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+# Или через make install-cpu
 
 # === ТРАНЗИТИВНЫЕ (явно для pip-audit) ===
 httpx==0.28.1

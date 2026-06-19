@@ -33,8 +33,11 @@ cd poisk-mcp
 ./deploy.sh
 
 # 3. Подключить к Claude Code
-claude mcp add poisk-mcp --stdio $(pwd)/venv/bin/python $(pwd)/server.py
+claude mcp add poisk-mcp -- $(pwd)/venv/bin/python $(pwd)/server.py
 ```
+
+> 💡 **Совет:** Если устанавливаешь вручную — используй `make install-cpu` вместо `make install`,
+> чтобы PyTorch скачался без CUDA-пакетов (экономит ~2.5 ГБ трафика и часа ожидания).
 
 ## Ручная установка (по шагам)
 
@@ -49,7 +52,18 @@ docker compose up -d
 
 ```bash
 python3 -m venv venv
+
+# ВАЖНО: сначала устанавливаем CPU-only PyTorch (без гигабайтов CUDA)
+venv/bin/pip install torch torchvision torchaudio \
+  --index-url https://download.pytorch.org/whl/cpu
+
+# затем остальные зависимости
 venv/bin/pip install -r requirements.txt
+```
+
+Или одной командой:
+```bash
+make install-cpu
 ```
 
 ### 3. Модель нейро-ранжирования

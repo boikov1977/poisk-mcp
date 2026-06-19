@@ -18,6 +18,11 @@ $(VENV)/bin/python:
 install: venv
 	$(PIP) install -r $(REQS)
 
+# CPU-only PyTorch (без CUDA — в 10 раз быстрее установка)
+install-cpu: venv
+	$(PIP) install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+	$(PIP) install -r $(REQS)
+
 check: sca
 
 sca:

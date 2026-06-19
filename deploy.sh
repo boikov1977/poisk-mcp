@@ -72,6 +72,8 @@ fi
 # ── 4. Python dependencies ──
 echo ""
 echo "📋 Step 4/5: Python packages..."
+"$VENV_DIR/bin/pip" install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu -q
+echo "   ✅ PyTorch (CPU-only, без гигабайтов CUDA)"
 "$VENV_DIR/bin/pip" install -r "$REPO_DIR/requirements.txt" -q
 echo "   ✅ All packages installed"
 
