@@ -136,7 +136,7 @@ class SearchConfig:
     CACHE_TTL_SECONDS: int = 3600
     CACHE_MAX_SIZE: int = 1000
     ENABLE_NEURAL_RERANK: bool = True
-    NEURAL_MODEL_NAME: str = "all-MiniLM-L6-v2"
+    NEURAL_MODEL_NAME: str = "ms-marco-MultiBERT-L-12"
     TOP_K_RERANK: int = 20
     ENABLE_DIVERSITY: bool = True
     DIVERSITY_LAMBDA: float = 0.7

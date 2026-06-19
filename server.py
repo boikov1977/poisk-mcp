@@ -79,19 +79,20 @@ sys.stdout = _original_stdout
 # ============================================================================
 
 @mcp.tool()
-def search_web(query: str, max_results: int = 8, backend: str = "auto", rerank: bool = True, diversity: bool = True) -> str:
-    """Поиск с нейро-ранжированием"""
-    if len(query.strip()) < 2: 
+def search_web(query: str, max_results: int = 8, backend: str = "auto", rerank: bool = True, diversity: bool = True, languages: str = "") -> str:
+    """Поиск с нейро-ранжированием. languages — список языков через запятую, напр. "ru,en,zh" для мультиязычного поиска"""
+    if len(query.strip()) < 2:
         return "❌ Слишком короткий запрос"
-    
+
     try:
-        res, m = engine.search(query, min(max_results, 20), backend, rerank, diversity)
-        if not res: 
+        langs = [l.strip() for l in languages.split(",") if l.strip()] if languages else None
+        res, m = engine.search(query, min(max_results, 20), backend, rerank, diversity, languages=langs)
+        if not res:
             return f"❌ {m.get('error', 'Ничего не найдено')}"
-        
+
         o = [
             f"🔍 \"{m['original']}\"",
-            f"📊 {m['count']} результатов | ⏱️ {m['ms']:.0f}ms | {'💾 Cached' if m['cached'] else '🆕 Fresh'} | {'🤖 Reranked' if m['reranked'] else ''}{' 🎯 Diversified' if m['diversified'] else ''}",
+            f"📊 {m['count']} результатов | ⏱️ {m['ms']:.0f}ms | {'💾 Cached' if m['cached'] else '🆕 Fresh'} | {'🤖 Reranked' if m['reranked'] else ''}{' 🎯 Diversified' if m['diversified'] else ''}{' 🌐 Multilingual' if m.get('languages') else ''}",
             "─" * 60
         ]
         
