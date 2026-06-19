@@ -8,8 +8,7 @@ from models import SearchResult, ProcessedQuery
 from config import config
 from cache import search_cache, rate_limiter
 from backends import DuckDuckGoBackend, SearXNGBackend
-from reranker import NeuralReranker, TRANSFORMERS_AVAILABLE, TORCH_AVAILABLE, NUMPY_AVAILABLE, util
-import numpy as np
+from reranker import NeuralReranker
 
 logger = logging.getLogger("SearchTool")
 
@@ -27,49 +26,113 @@ class DiversityEngine:
     def __init__(self):
         self.lambda_param = config.DIVERSITY_LAMBDA
         self.reranker = NeuralReranker.get_instance()
-    
+
     def diversify(self, results, query=None, target_count=None):
         if not results or len(results) <= 1: return results
         target_count = target_count or min(len(results), config.MAX_SEARCH_RESULTS)
-        if not self.reranker.is_available: return self._domain_diversify(results, target_count)
-        
-        try:
-            texts = [f"{r.title} {r.url}" for r in results]
-            embs = self.reranker.encode(texts, convert_to_tensor=True)
-            selected = [0]
-            remaining = list(range(1, len(results)))
-            
-            while len(selected) < target_count and remaining:
-                best_score, best_idx = -float('inf'), None
-                for idx in remaining:
-                    rel = results[idx].score
-                    sim_matrix = util.cos_sim(embs[idx:idx+1], embs[selected])
-                    max_sim = sim_matrix.max().item()
-                    mmr = self.lambda_param * rel - (1-self.lambda_param)*max_sim
-                    if mmr > best_score: best_score, best_idx = mmr, idx
-                if best_idx is not None:
-                    selected.append(best_idx)
-                    remaining.remove(best_idx)
-            
-            diversified = [results[i] for i in selected]
-            for i, r in enumerate(diversified): r.rank = i+1
-            return diversified
-        except Exception as e:
-            logger.warning(f"Diversity failed: {e}")
-            return results[:target_count]
-    
-    def _domain_diversify(self, results, count):
+
+        # Если доступны эмбеддинги (bi-encoder) — используем их
+        if self.reranker.is_available and self.reranker.supports_embeddings:
+            return self._embedding_mmr(results, target_count)
+
+        # Иначе — MMR на текстовом сходстве (работает с любым encoder'ом)
+        return self._text_diversify(results, target_count)
+
+    def _embedding_mmr(self, results, target_count):
+        """MMR на основе эмбеддингов (bi-encoder)."""
+        from reranker import util
+        texts = [f"{r.title} {r.url}" for r in results]
+        embs = self.reranker.encode(texts, convert_to_tensor=True)
+        selected = [0]
+        remaining = list(range(1, len(results)))
+
+        while len(selected) < target_count and remaining:
+            best_score, best_idx = -float('inf'), None
+            for idx in remaining:
+                rel = results[idx].score
+                sim_matrix = util.cos_sim(embs[idx:idx+1], embs[selected])
+                max_sim = sim_matrix.max().item()
+                mmr = self.lambda_param * rel - (1-self.lambda_param)*max_sim
+                if mmr > best_score: best_score, best_idx = mmr, idx
+            if best_idx is not None:
+                selected.append(best_idx)
+                remaining.remove(best_idx)
+
+        diversified = [results[i] for i in selected]
+        for i, r in enumerate(diversified): r.rank = i+1
+        return diversified
+
+    def _text_diversify(self, results, target_count):
+        """MMR на основе текстового сходства (Jaccard similarity).
+        Работает без эмбеддингов — подходит для FlashRank cross-encoder."""
+
+        # Если тексты короткие — используем domain-based MMR
+        texts = [f"{r.title} {r.snippet}" for r in results]
+        avg_len = sum(len(t) for t in texts) / len(texts) if texts else 0
+        if avg_len < 50:
+            return self._domain_mmr(results, target_count)
+
+        # Токенизация в слова
+        def tokenize(text):
+            return set(re.findall(r'\w+', text.lower()))
+
+        tokens = [tokenize(t) for t in texts]
+
+        selected = [0]
+        remaining = list(range(1, len(results)))
+
+        while len(selected) < target_count and remaining:
+            best_score, best_idx = -float('inf'), None
+            for idx in remaining:
+                rel = results[idx].score
+                # Jaccard similarity с каждым выбранным — берём максимум
+                max_sim = 0.0
+                for sel in selected:
+                    if not tokens[idx] or not tokens[sel]:
+                        continue
+                    intersection = len(tokens[idx] & tokens[sel])
+                    union = len(tokens[idx] | tokens[sel])
+                    sim = intersection / union if union > 0 else 0.0
+                    max_sim = max(max_sim, sim)
+
+                mmr = self.lambda_param * rel - (1.0 - self.lambda_param) * max_sim
+                if mmr > best_score:
+                    best_score, best_idx = mmr, idx
+
+            if best_idx is not None:
+                selected.append(best_idx)
+                remaining.remove(best_idx)
+
+        diversified = [results[i] for i in selected]
+        for i, r in enumerate(diversified): r.rank = i+1
+        return diversified
+
+    def _domain_mmr(self, results, target_count):
+        """MMR на основе доменов. similarity=1 если домен совпадает, 0 иначе."""
         from urllib.parse import urlparse
-        seen, out = set(), []
-        for r in results:
-            d = urlparse(r.url).netloc
-            if d not in seen:
-                seen.add(d); out.append(r)
-                if len(out) >= count: break
-        for r in results:
-            if r not in out: out.append(r)
-            if len(out) >= count: break
-        return out
+
+        domains = [urlparse(r.url).netloc for r in results]
+
+        selected = [0]
+        remaining = list(range(1, len(results)))
+
+        while len(selected) < target_count and remaining:
+            best_score, best_idx = -float('inf'), None
+            for idx in remaining:
+                rel = results[idx].score
+                # similarity = 1 если домен уже есть среди выбранных
+                max_sim = 1.0 if any(domains[idx] == domains[sel] for sel in selected) else 0.0
+                mmr = self.lambda_param * rel - (1.0 - self.lambda_param) * max_sim
+                if mmr > best_score:
+                    best_score, best_idx = mmr, idx
+
+            if best_idx is not None:
+                selected.append(best_idx)
+                remaining.remove(best_idx)
+
+        diversified = [results[i] for i in selected]
+        for i, r in enumerate(diversified): r.rank = i+1
+        return diversified
 
 class SearchEngine:
     def __init__(self):
@@ -84,36 +147,57 @@ class SearchEngine:
         # ИСПРАВЛЕНО: deque с maxlen для предотвращения утечки памяти
         self._stats = {"queries": 0, "cache_hits": 0, "backend_usage": {}, "latencies": deque(maxlen=1000)}
     
-    def search(self, query, max_results=None, backend="auto", rerank=True, diversity=True):
+    # Карта языков → регионы DuckDuckGo
+    LANGUAGE_REGIONS = {
+        "ru": "ru-ru",
+        "en": "us-en",
+        "zh": "cn-zh",
+        "de": "de-de",
+        "fr": "fr-fr",
+        "es": "es-es",
+        "ja": "jp-jp",
+        "ko": "kr-kr",
+    }
+
+    def search(self, query, max_results=None, backend="auto", rerank=True, diversity=True, languages=None):
         t0 = time.time()
         mr = max_results or config.DEFAULT_MAX_RESULTS
-        meta = {"original": query, "ms": 0, "backend": "", "count": 0, "cached": False, "reranked": False, "diversified": False}
+        meta = {"original": query, "ms": 0, "backend": "", "count": 0, "cached": False, "reranked": False, "diversified": False, "languages": languages}
         self._stats["queries"] += 1
-        
+
         try:
             pq = QueryProcessor.process(query)
         except ValueError as e:
             return [], {**meta, "error": str(e)}
-        
+
         sq = pq.get_search_query()
         if not sq or not sq.strip(): return [], {**meta, "error": "Empty search query"}
-        
+
         logger.info(f"🔎 Final Search Query: {sq}")
-        
-        cached = search_cache.get("search", sq, mr)
+
+        # Кэш только для одноязычного поиска
+        cache_key = f"search:{sq}:{languages}"
+        if not languages:
+            cache_key = f"search:{sq}"
+
+        cached = search_cache.get("search", cache_key, mr) if not languages else None
         if cached:
             meta["cached"] = True; meta["ms"] = (time.time()-t0)*1000
             self._stats["cache_hits"] += 1
             return cached, meta
-        
+
         if not rate_limiter.acquire(5): return [], {**meta, "error": "Rate limited"}
 
-        results = self._search(sq, mr, backend)
-        if not results: 
+        if languages:
+            results = self._multilingual_search(sq, mr, backend, languages)
+        else:
+            results = self._search(sq, mr, backend)
+
+        if not results:
             logger.warning(f"⚠️ No results found for: {sq}")
             return [], {**meta, "error": "No results"}
 
-        # Записываем, какие бэкенды дали результаты (хотя бы один)
+        # Записываем бэкенд
         meta["backend"] = results[0].source_backend
         self._stats["backend_usage"][meta["backend"]] = self._stats["backend_usage"].get(meta["backend"], 0)+1
 
@@ -121,19 +205,41 @@ class SearchEngine:
             results = self._rerank(sq, results)
             meta["reranked"] = True
 
-        # ИСПРАВЛЕНО: diversity применяем для любого количества результатов > 1
         if diversity and len(results) > 1:
             results = self.diversity.diversify(results, sq, mr)
             meta["diversified"] = True
 
         meta["count"] = len(results); meta["ms"] = (time.time()-t0)*1000
         self._stats["latencies"].append(meta["ms"])
-        search_cache.set("search", results, sq, mr)
-        
-        logger.info(f"✅ {len(results)} results in {meta['ms']:.0f}ms [{meta['backend']}]")
+
+        if not languages:
+            search_cache.set("search", results, cache_key, mr)
+
+        logger.info(f"✅ {len(results)} results in {meta['ms']:.0f}ms [langs={languages}]")
         return results, meta
-    
-    def _search(self, query, mr, backend):
+
+    def _multilingual_search(self, query, mr, backend, languages):
+        """Поиск по одному запросу в разных языковых контекстах."""
+        all_results = []
+        seen_urls = set()
+
+        for lang in languages:
+            try:
+                region = self.LANGUAGE_REGIONS.get(lang, "wt-wt")
+                results = self._search(query, mr * 2, backend, lang_hint=region)
+                for r in results:
+                    if r.url not in seen_urls:
+                        seen_urls.add(r.url)
+                        all_results.append(r)
+            except Exception as e:
+                logger.warning(f"Multilingual search failed for {lang}: {e}")
+                continue
+
+        # Сортируем по исходному score
+        all_results.sort(key=lambda x: x.score, reverse=True)
+        return all_results[:mr]
+
+    def _search(self, query, mr, backend, lang_hint=None):
         # Определяем порядок бэкендов
         order = [backend] if backend!="auto" and backend in self.backends else list(self.backends.keys())
 
@@ -144,7 +250,7 @@ class SearchEngine:
 
         for b in order:
             try:
-                r = self.backends[b].search(query, per_backend_limit)
+                r = self.backends[b].search(query, per_backend_limit, lang_hint)
                 if r:
                     all_results.extend(r)
             except Exception as e:
@@ -158,7 +264,7 @@ class SearchEngine:
                 logger.info(f"🔄 Retrying with simplified query: {simple_query}")
                 for b in order:
                     try:
-                        r = self.backends[b].search(simple_query, per_backend_limit)
+                        r = self.backends[b].search(simple_query, per_backend_limit, lang_hint)
                         if r: all_results.extend(r)
                     except: continue
 
@@ -186,27 +292,20 @@ class SearchEngine:
             if not texts or all(not t.strip() for t in texts):
                 logger.warning("Empty texts for reranking")
                 return results
-            
-            q_emb = self.reranker.encode(query, convert_to_tensor=True)
-            d_emb = self.reranker.encode(texts, convert_to_tensor=True)
-            
-            sims = util.cos_sim(q_emb, d_emb)[0]
-            
-            if TORCH_AVAILABLE and hasattr(sims, 'cpu'):
-                scores = sims.cpu().detach().numpy()
-            elif NUMPY_AVAILABLE:
-                scores = np.array(sims.tolist() if hasattr(sims, 'tolist') else sims)
-            else:
-                scores = sims.tolist() if hasattr(sims, 'tolist') else list(sims)
-            
-            scores_list = [float(s) for s in scores]
-            
-            for i, r in enumerate(results[:top_k]):
-                r.score = r.score*0.4 + scores_list[i]*0.6
-                r.features["neural"] = round(scores_list[i], 4)
-            
-            results.sort(key=lambda x: x.score, reverse=True)
-            for i, r in enumerate(results): r.rank = i+1
+
+            # FlashRank cross-encoder — оценивает релевантность пары запрос-документ
+            scores = self.reranker.rerank(query, texts)
+
+            if scores and len(scores) == len(results[:top_k]):
+                scores_list = [float(s) for s in scores]
+
+                for i, r in enumerate(results[:top_k]):
+                    r.score = r.score * 0.4 + scores_list[i] * 0.6
+                    r.features["neural"] = round(scores_list[i], 4)
+
+                results.sort(key=lambda x: x.score, reverse=True)
+                for i, r in enumerate(results):
+                    r.rank = i + 1
         except Exception as e:
             logger.warning(f"Rerank failed: {e}")
         return results

@@ -15,16 +15,8 @@ duckduckgo-search==8.1.1
 # === MCP SERVER ===
 mcp==1.27.1
 
-# === NLP / NEURAL RERANKING ===
-sentence-transformers==5.5.0
-numpy==2.4.4
-
-# === PyTorch (CPU-ONLY!) ===
-# ВАЖНО: Не добавляй torch сюда — sentence-transformers потянет его сам,
-#        но из PyPI он скачает CUDA-версию с гигабайтами nvidia-мусора.
-# Устанавливай отдельно через CPU-индекс:
-#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-# Или через make install-cpu
+# === NEURAL RERANKING (FlashRank — ONNX, CPU-only, без PyTorch) ===
+flashrank==0.2.8
 
 # === ТРАНЗИТИВНЫЕ (явно для pip-audit) ===
 httpx==0.28.1

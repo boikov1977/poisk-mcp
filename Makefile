@@ -17,11 +17,11 @@ $(VENV)/bin/python:
 
 install: venv
 	$(PIP) install -r $(REQS)
+	@echo "✅ FlashRank model will be downloaded on first run"
 
-# CPU-only PyTorch (без CUDA — в 10 раз быстрее установка)
-install-cpu: venv
-	$(PIP) install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-	$(PIP) install -r $(REQS)
+# Устарел: раньше требовался CPU-only PyTorch. Теперь не нужен.
+install-cpu: install
+	@echo "✅ PyTorch больше не требуется — FlashRank использует ONNX Runtime"
 
 check: sca
 

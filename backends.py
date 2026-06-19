@@ -25,23 +25,24 @@ except ImportError:
 class DuckDuckGoBackend:
     name = "ddgs"
     
-    def search(self, query, max_results=10):
+    def search(self, query, max_results=10, lang_hint=None):
         if not DDGS_AVAILABLE: raise RuntimeError("DDGS not available")
         results = []
-        
-        # Список стратегий: 
-        # 1. Обычный поиск (регион авто)
-        # 2. Поиск по региону ru-ru
-        # 3. Поиск по региону us-en
-        # 4. Поиск через news (иногда дает результаты, когда обычный поиск пуст)
-        
-        methods = [
-            {"region": "wt-wt"},
-            {"region": "ru-ru"},
-            {"region": "us-en"},
-            {"news": True}
-        ]
-        
+
+        # Если указана языковая подсказка — сначала пробуем её, потом fallback
+        if lang_hint:
+            methods = [
+                {"region": lang_hint},
+                {"region": "wt-wt"},
+            ]
+        else:
+            methods = [
+                {"region": "wt-wt"},
+                {"region": "ru-ru"},
+                {"region": "us-en"},
+                {"news": True},
+            ]
+
         for method in methods:
             try:
                 with DDGS() as ddgs:
@@ -160,14 +161,18 @@ class SearXNGBackend:
                     continue
             return None
 
-    def search(self, query, max_results=10):
+    def search(self, query, max_results=10, lang_hint=None):
         instance = self._get_working_instance()
         if not instance: raise RuntimeError("No SearXNG instances available")
+
+        params = {"q": query, "format": "json", "categories": "general"}
+        if lang_hint:
+            params["language"] = lang_hint
 
         try:
             resp = self.session.get(
                 f"{instance}/search",
-                params={"q": query, "format": "json", "categories": "general"},
+                params=params,
                 timeout=15,
                 headers={"Accept": "application/json"}
             )
