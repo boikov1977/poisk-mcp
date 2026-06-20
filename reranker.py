@@ -74,8 +74,9 @@ class _NeuralRerankerSingleton:
             logger.info(f"🧠 Loading FlashRank model: {model_name}")
             start_time = time.time()
 
-            # FlashRank сам скачивает ONNX-модель при первом запуске
-            cls._model = Ranker(model_name=model_name)
+            # FlashRank — указали cache_dir в project/models/flashrank
+            cache_path = str(MODEL_CACHE_DIR / "flashrank")
+            cls._model = Ranker(model_name=model_name, cache_dir=cache_path)
 
             load_time = time.time() - start_time
             cls._model_name = model_name
