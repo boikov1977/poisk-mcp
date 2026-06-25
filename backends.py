@@ -40,21 +40,16 @@ class DuckDuckGoBackend:
                 {"region": "wt-wt"},
                 {"region": "ru-ru"},
                 {"region": "us-en"},
-                {"news": True},
             ]
 
         for method in methods:
             try:
                 with DDGS() as ddgs:
-                    if method.get("news"):
-                        search_results = ddgs.news(query, max_results=max_results)
-                    else:
-                        search_results = ddgs.text(query, max_results=max_results, region=method["region"])
-                    
+                    search_results = ddgs.text(query, max_results=max_results, region=method["region"])
+
                     if search_results:
                         for i, r in enumerate(search_results):
                             if i >= max_results: break
-                            # Унификация формата для news и text
                             url = r.get("href") or r.get("url")
                             body = r.get("body") or r.get("snippet") or ""
                             results.append(SearchResult(
@@ -65,7 +60,11 @@ class DuckDuckGoBackend:
                             ))
                         return results
             except Exception as e:
+                logger.debug(f"DDGS method {method} failed: {e}")
                 continue
+
+        if not results:
+            logger.warning("DDGS: all search methods exhausted")
         return results
     
     def news(self, query, max_results=10, timelimit=None):
@@ -139,27 +138,32 @@ class SearXNGBackend:
         self._availability_lock = threading.Lock()
 
     def _get_working_instance(self):
-        # ИСПРАВЛЕНО: вся проверка и обновление атомарны
-        with self._instance_lock:
-            # Сначала проверяем закэшированный инстанс
-            if self._available_instance:
-                try:
-                    resp = self.session.get(self._available_instance, timeout=5)
-                    if resp.status_code == 200:
-                        return self._available_instance
-                except:
-                    self._available_instance = None
+        # Сначала проверяем закэшированный инстанс (без блокировки)
+        cached = self._available_instance
+        if cached:
+            try:
+                resp = self.session.get(cached, timeout=5)
+                if resp.status_code == 200:
+                    return cached
+            except Exception:
+                pass  # кэш протух — ищем дальше
 
-            # Если не работает, перебираем список
-            for instance in self.INSTANCES:
-                try:
-                    resp = self.session.get(instance, timeout=5)
-                    if resp.status_code == 200:
+        # Поиск работающего инстанса — сетевые вызовы ВНЕ блокировки,
+        # чтобы параллельные поиски не ждали друг друга
+        for instance in self.INSTANCES:
+            try:
+                resp = self.session.get(instance, timeout=5)
+                if resp.status_code == 200:
+                    with self._instance_lock:
                         self._available_instance = instance
-                        return instance
-                except Exception:
-                    continue
-            return None
+                    return instance
+            except Exception:
+                continue
+
+        # Ничего не работает
+        with self._instance_lock:
+            self._available_instance = None
+        return None
 
     def search(self, query, max_results=10, lang_hint=None):
         instance = self._get_working_instance()

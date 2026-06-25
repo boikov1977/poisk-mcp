@@ -27,9 +27,17 @@ class Net:
             self._stats["req"] += 1
             try:
                 r = self.s.get(url, timeout=config.REQUEST_TIMEOUT, allow_redirects=False, **kw)
-                if r.ok: 
-                    self._stats["bytes"] += len(r.content)
-                else: 
+                if r.ok:
+                    # Используем Content-Length из заголовка для статистики,
+                    # чтобы не материализовать тело ответа при stream=True.
+                    # Если заголовок кривой или отсутствует — не падаем, пропускаем.
+                    cl = r.headers.get("Content-Length")
+                    if cl:
+                        try:
+                            self._stats["bytes"] += int(cl)
+                        except (TypeError, ValueError):
+                            pass
+                else:
                     self._stats["err"] += 1
                 return r
             except Exception:
@@ -46,7 +54,8 @@ def safe_ip(ip):
     try:
         o = ipaddress.ip_address(ip)
         return not any([o.is_private, o.is_loopback, o.is_reserved, o.is_multicast, o.is_link_local, str(o) in {"169.254.169.254"}])
-    except: 
+    except Exception as e:
+        logger.warning(f"safe_ip failed for {ip}: {e}")
         return False
 
 _dns_cache = {}
@@ -58,15 +67,14 @@ def resolve(host):
             result, timestamp = _dns_cache[host]
             if time.time() - timestamp < 300: return result
     try:
-        socket.setdefaulttimeout(3)
+        # Не мутируем глобальный socket.setdefaulttimeout — это ломает
+        # параллельные HTTP-запросы в многопоточной среде
         ip = socket.gethostbyname(host)
-        socket.setdefaulttimeout(None)
         res = ip if safe_ip(ip) else None
         with _dns_lock:
             _dns_cache[host] = (res, time.time())
         return res
     except Exception:
-        socket.setdefaulttimeout(None)
         with _dns_lock:
             _dns_cache[host] = (None, time.time())
         return None
@@ -75,9 +83,10 @@ def valid_url(u):
     try:
         p = urlparse(u)
         if p.scheme not in ("http", "https") or not p.hostname: return False
-        if p.port and p.port in {22, 23, 25, 53, 110, 143, 993, 995}: return False
+        if p.port and p.port not in {80, 443}: return False
         return resolve(p.hostname) is not None
-    except: 
+    except Exception as e:
+        logger.warning(f"valid_url failed for {u}: {e}")
         return False
 
 def safe_req(url):
@@ -104,5 +113,6 @@ def path_ok(p):
     try:
         rp = os.path.realpath(p)
         return any(os.path.commonpath([rp, os.path.realpath(a)]) == os.path.realpath(a) for a in ALLOWED_DIRS)
-    except: 
+    except Exception as e:
+        logger.warning(f"path_ok failed for {p}: {e}")
         return False

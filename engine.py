@@ -31,36 +31,8 @@ class DiversityEngine:
         if not results or len(results) <= 1: return results
         target_count = target_count or min(len(results), config.MAX_SEARCH_RESULTS)
 
-        # Если доступны эмбеддинги (bi-encoder) — используем их
-        if self.reranker.is_available and self.reranker.supports_embeddings:
-            return self._embedding_mmr(results, target_count)
-
-        # Иначе — MMR на текстовом сходстве (работает с любым encoder'ом)
+        # MMR на текстовом сходстве (работает с любым encoder'ом)
         return self._text_diversify(results, target_count)
-
-    def _embedding_mmr(self, results, target_count):
-        """MMR на основе эмбеддингов (bi-encoder)."""
-        from reranker import util
-        texts = [f"{r.title} {r.url}" for r in results]
-        embs = self.reranker.encode(texts, convert_to_tensor=True)
-        selected = [0]
-        remaining = list(range(1, len(results)))
-
-        while len(selected) < target_count and remaining:
-            best_score, best_idx = -float('inf'), None
-            for idx in remaining:
-                rel = results[idx].score
-                sim_matrix = util.cos_sim(embs[idx:idx+1], embs[selected])
-                max_sim = sim_matrix.max().item()
-                mmr = self.lambda_param * rel - (1-self.lambda_param)*max_sim
-                if mmr > best_score: best_score, best_idx = mmr, idx
-            if best_idx is not None:
-                selected.append(best_idx)
-                remaining.remove(best_idx)
-
-        diversified = [results[i] for i in selected]
-        for i, r in enumerate(diversified): r.rank = i+1
-        return diversified
 
     def _text_diversify(self, results, target_count):
         """MMR на основе текстового сходства (Jaccard similarity).
@@ -176,9 +148,7 @@ class SearchEngine:
         logger.info(f"🔎 Final Search Query: {sq}")
 
         # Кэш только для одноязычного поиска
-        cache_key = f"search:{sq}:{languages}"
-        if not languages:
-            cache_key = f"search:{sq}"
+        cache_key = f"search:{sq}" + (f":{','.join(sorted(languages))}" if languages else "")
 
         cached = search_cache.get("search", cache_key, mr) if not languages else None
         if cached:
@@ -266,7 +236,9 @@ class SearchEngine:
                     try:
                         r = self.backends[b].search(simple_query, per_backend_limit, lang_hint)
                         if r: all_results.extend(r)
-                    except: continue
+                    except Exception as e:
+                        logger.debug(f"Simplified query backend {b} failed: {e}")
+                        continue
 
         if not all_results:
             return []

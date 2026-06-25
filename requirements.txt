@@ -10,7 +10,6 @@ urllib3==2.7.0
 
 # === ПОИСК ===
 ddgs==9.14.4
-duckduckgo-search==8.1.1
 
 # === MCP SERVER ===
 mcp==1.27.1

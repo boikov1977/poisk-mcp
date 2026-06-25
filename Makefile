@@ -31,7 +31,7 @@ sca:
 
 test:
 	@echo "🧪 Running tests..."
-	$(PYTHON) -m pytest tests -v --tb=short || true
+	$(PYTHON) -m pytest tests -v --tb=short
 
 clean:
 	rm -rf $(VENV)

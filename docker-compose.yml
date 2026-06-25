@@ -7,7 +7,9 @@ services:
       - ./searxng-data:/etc/searxng:rw
     environment:
       - SEARXNG_BASE_URL=http://localhost:8081/
-      - SEARXNG_SECRET_KEY=change-this-secret-key-in-production
+      # Генерируется deploy.sh через openssl rand -hex 32 в .env.
+      # Fallback — для прямого docker compose up без deploy.sh.
+      - SEARXNG_SECRET_KEY=${SEARXNG_SECRET_KEY:-change-this-secret-key-in-production}
     cap_drop:
       - ALL
     cap_add:
