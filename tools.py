@@ -9,17 +9,6 @@ import logging
 
 logger = logging.getLogger("SearchTool")
 
-# Импортируем wmo из tools.py для использования в server.py
-WMO = {
-    0: "Ясно", 1: "Ясно", 2: "Облачно", 3: "Пасмурно",
-    45: "Туман", 61: "Дождь", 63: "Дождь", 65: "Ливень",
-    71: "Снег", 73: "Снег", 75: "Снегопад", 80: "Ливень", 95: "Гроза"
-}
-
-def wmo(c):
-    """Получить описание погоды по WMO коду"""
-    return WMO.get(c, f"?({c})")
-
 def jina(url, net):
     """Получить markdown-контент через Jina Reader API"""
     try:
@@ -84,5 +73,5 @@ def is_binary(filepath):
                 return False
             # Проверяем первые 8KB на наличие null bytes
             return b'\x00' in chunk
-    except:
+    except Exception:
         return True

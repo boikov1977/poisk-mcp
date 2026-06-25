@@ -42,7 +42,12 @@ else
     cd "$REPO_DIR"
     # Create searxng-data dir if missing
     mkdir -p searxng-data
-    docker compose up -d
+    # Generate secure secret key if not already set
+    if [ ! -f .env ] || ! grep -q "SEARXNG_SECRET_KEY" .env 2>/dev/null; then
+        echo "SEARXNG_SECRET_KEY=$(openssl rand -hex 32)" >> .env
+        echo "   🔑 Generated SEARXNG_SECRET_KEY in .env"
+    fi
+    docker compose --env-file .env up -d
     # Wait for SearXNG to be ready
     echo "   ⏳ Waiting for SearXNG..."
     for i in $(seq 1 15); do

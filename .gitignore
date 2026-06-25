@@ -25,3 +25,7 @@ searxng-data/
 # SCA
 .ruff_cache/
 .pytest_cache/
+
+# Backup
+backup/
+.coverage

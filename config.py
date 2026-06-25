@@ -67,10 +67,9 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["PYTHONWARNINGS"] = "ignore"
 os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = "30"
 
-# Очищаем SOCKS-прокси — они мешают загрузке моделей huggingface_hub,
-# а для рабочего HTTP-трафика (поиск, чтение страниц) достаточно HTTP_PROXY
-for _var in ["ALL_PROXY", "all_proxy"]:
-    os.environ.pop(_var, None)
+# NOTE: ALL_PROXY больше не чистится глобально — это ломало SOCKS-прокси
+# пользователям. Если загрузка моделей huggingface_hub падает из-за прокси,
+# настройте HF_ENDPOINT или HTTP_PROXY вручную.
 
 # Путь к моделям в корне проекта
 MODEL_CACHE_DIR = Path(__file__).parent / "models"
