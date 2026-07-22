@@ -97,16 +97,12 @@ def test_ddgs_search_url_field_variants():
     assert results[0].snippet == "S"
 
 
-def test_ddgs_search_fallback_regions():
-    """Если одна региона не работает — фолбекится на следующую"""
+def test_ddgs_search_no_fallback_on_error():
+    """Бэкенд не делает fallback по регионам — одна попытка, при ошибке пустой список"""
     mock_ddgs = MagicMock()
     mock_ddgs.__enter__ = MagicMock(return_value=mock_ddgs)
     mock_ddgs.__exit__ = MagicMock(return_value=False)
-    # Первый вызов падает, второй возвращает результат
-    mock_ddgs.text.side_effect = [
-        Exception("blocked"),
-        [{"title": "Fallback", "href": "https://f.com", "body": "B"}],
-    ]
+    mock_ddgs.text.side_effect = Exception("blocked")
 
     mock_cls, orig = _make_mock_ddgs(mock_ddgs)
     try:
@@ -116,8 +112,27 @@ def test_ddgs_search_fallback_regions():
     finally:
         _restore_ddgs(orig)
 
-    assert len(results) == 1
-    assert results[0].title == "Fallback"
+    assert results == []
+    # Ровно один вызов — никакого fallback'а
+    assert mock_ddgs.text.call_count == 1
+
+
+def test_ddgs_search_uses_wt_wt_by_default():
+    """Без lang_hint используется регион wt-wt"""
+    mock_ddgs = MagicMock()
+    mock_ddgs.__enter__ = MagicMock(return_value=mock_ddgs)
+    mock_ddgs.__exit__ = MagicMock(return_value=False)
+    mock_ddgs.text.return_value = [{"title": "R", "href": "https://r.com", "body": "B"}]
+
+    mock_cls, orig = _make_mock_ddgs(mock_ddgs)
+    try:
+        with patch.object(bk, "DDGS_AVAILABLE", True):
+            ddg = bk.DuckDuckGoBackend()
+            ddg.search("hello", max_results=5)
+    finally:
+        _restore_ddgs(orig)
+
+    mock_ddgs.text.assert_called_with("hello", max_results=5, region="wt-wt")
 
 
 def test_ddgs_search_with_lang_hint():
@@ -134,8 +149,9 @@ def test_ddgs_search_with_lang_hint():
     finally:
         _restore_ddgs(orig)
 
-    # Первый вызов должен был идти с region=ru-ru
-    mock_ddgs.text.assert_called()
+    # Вызов должен был идти с region=ru-ru (без fallback)
+    mock_ddgs.text.assert_called_with("hello", max_results=5, region="ru-ru")
+    assert mock_ddgs.text.call_count == 1
     assert len(results) == 1
 
 

@@ -27,44 +27,26 @@ class DuckDuckGoBackend:
     
     def search(self, query, max_results=10, lang_hint=None):
         if not DDGS_AVAILABLE: raise RuntimeError("DDGS not available")
+        # Одна попытка: lang_hint если задан, иначе wt-wt. Без fallback'ов.
+        region = lang_hint or "wt-wt"
         results = []
-
-        # Если указана языковая подсказка — сначала пробуем её, потом fallback
-        if lang_hint:
-            methods = [
-                {"region": lang_hint},
-                {"region": "wt-wt"},
-            ]
-        else:
-            methods = [
-                {"region": "wt-wt"},
-                {"region": "ru-ru"},
-                {"region": "us-en"},
-            ]
-
-        for method in methods:
-            try:
-                with DDGS() as ddgs:
-                    search_results = ddgs.text(query, max_results=max_results, region=method["region"])
-
-                    if search_results:
-                        for i, r in enumerate(search_results):
-                            if i >= max_results: break
-                            url = r.get("href") or r.get("url")
-                            body = r.get("body") or r.get("snippet") or ""
-                            results.append(SearchResult(
-                                title=r.get("title", "No title"),
-                                url=url,
-                                snippet=body[:300],
-                                score=1.0 - i*0.05, rank=i+1, source_backend=self.name
-                            ))
-                        return results
-            except Exception as e:
-                logger.debug(f"DDGS method {method} failed: {e}")
-                continue
-
-        if not results:
-            logger.warning("DDGS: all search methods exhausted")
+        try:
+            with DDGS() as ddgs:
+                search_results = ddgs.text(query, max_results=max_results, region=region)
+                if search_results:
+                    for i, r in enumerate(search_results):
+                        if i >= max_results: break
+                        url = r.get("href") or r.get("url")
+                        body = r.get("body") or r.get("snippet") or ""
+                        results.append(SearchResult(
+                            title=r.get("title", "No title"),
+                            url=url,
+                            snippet=body[:300],
+                            score=1.0 - i*0.05, rank=i+1, source_backend=self.name
+                        ))
+                    return results
+        except Exception as e:
+            logger.warning(f"DDGS search failed for region={region}: {e}")
         return results
     
     def news(self, query, max_results=10, timelimit=None):
