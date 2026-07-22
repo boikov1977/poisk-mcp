@@ -125,7 +125,8 @@ def test_safe_req_ok():
 
 def test_safe_req_redirect():
     """safe_req should follow redirects"""
-    from network import safe_req, net
+    import requests
+    from network import safe_req
 
     # Create a fake 302 response followed by 200
     fake_resp_200 = MagicMock()
@@ -137,7 +138,9 @@ def test_safe_req_redirect():
     fake_resp_302.ok = False
     fake_resp_302.headers = {"Location": "https://example.com/final"}
 
-    with patch.object(net, "get", side_effect=[fake_resp_302, fake_resp_200]):
+    # New safe_req creates its own Session with PinnedHTTPAdapter,
+    # not using global net.get() — so we mock at requests.Session level.
+    with patch.object(requests.Session, "get", side_effect=[fake_resp_302, fake_resp_200]):
         r = safe_req("https://example.com/start")
         assert r.status_code == 200
 
