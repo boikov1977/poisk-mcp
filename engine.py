@@ -3,6 +3,7 @@ import time
 import os
 import logging
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List
 from models import SearchResult, ProcessedQuery
 from config import config
@@ -121,6 +122,10 @@ class SearchEngine:
         self.diversity = DiversityEngine()
         # ИСПРАВЛЕНО: deque с maxlen для предотвращения утечки памяти
         self._stats = {"queries": 0, "cache_hits": 0, "backend_usage": {}, "latencies": deque(maxlen=1000)}
+        # Общий пул потоков для параллельного поиска по бэкендам и языкам.
+        # max_workers=6 покрывает худший случай: 2 бэкенда × 3 языка в multilingual.
+        # Переиспользуем между вызовами — не создаём executor на каждый search.
+        self._executor = ThreadPoolExecutor(max_workers=6)
     
     # Карта языков → регионы DuckDuckGo
     LANGUAGE_REGIONS = {
@@ -192,21 +197,36 @@ class SearchEngine:
         return results, meta
 
     def _multilingual_search(self, query, mr, backend, languages):
-        """Поиск по одному запросу в разных языковых контекстах."""
+        """Поиск по одному запросу в разных языковых контекстах.
+
+        Все языки запускаются параллельно через self._executor.
+        Каждый future вызывает self._search(), который сам параллелит бэкенды.
+        Падение одного языка не роняет остальные.
+        """
         all_results = []
         seen_urls = set()
 
+        # Один future на каждый язык
+        futures = {}
         for lang in languages:
+            region = self.LANGUAGE_REGIONS.get(lang, "wt-wt")
+            future = self._executor.submit(self._search, query, mr * 2, backend, region)
+            futures[future] = lang
+
+        # Собираем результаты по мере готовности
+        for future in as_completed(futures):
+            lang = futures[future]
             try:
-                region = self.LANGUAGE_REGIONS.get(lang, "wt-wt")
-                results = self._search(query, mr * 2, backend, lang_hint=region)
-                for r in results:
-                    if r.url not in seen_urls:
-                        seen_urls.add(r.url)
-                        all_results.append(r)
+                results = future.result()
             except Exception as e:
                 logger.warning(f"Multilingual search failed for {lang}: {e}")
                 continue
+            if not results:
+                continue
+            for r in results:
+                if r.url not in seen_urls:
+                    seen_urls.add(r.url)
+                    all_results.append(r)
 
         # Сортируем по исходному score
         all_results.sort(key=lambda x: x.score, reverse=True)
@@ -221,27 +241,16 @@ class SearchEngine:
         # ИСПРАВЛЕНО: Агрегация результатов
         per_backend_limit = mr * 2
 
-        for b in order:
-            try:
-                r = self.backends[b].search(query, per_backend_limit, lang_hint)
-                if r:
-                    all_results.extend(r)
-            except Exception as e:
-                logger.warning(f"Backend {b} failed: {e}")
-                continue
+        # Запускаем все бэкенды параллельно — DDGS и SearXNG работают одновременно.
+        # Падение одного future не роняет остальные (исключение ловим в result()).
+        all_results = self._run_backends_parallel(order, query, per_backend_limit, lang_hint)
 
         # Если все еще пусто, пробуем упростить запрос (удаляем слова меньше 3 букв)
         if not all_results and len(query.split()) > 3:
             simple_query = " ".join([w for w in query.split() if len(w) > 2])
             if simple_query != query:
                 logger.info(f"🔄 Retrying with simplified query: {simple_query}")
-                for b in order:
-                    try:
-                        r = self.backends[b].search(simple_query, per_backend_limit, lang_hint)
-                        if r: all_results.extend(r)
-                    except Exception as e:
-                        logger.debug(f"Simplified query backend {b} failed: {e}")
-                        continue
+                all_results = self._run_backends_parallel(order, simple_query, per_backend_limit, lang_hint)
 
         if not all_results:
             return []
@@ -259,6 +268,55 @@ class SearchEngine:
 
         # ИСПРАВЛЕНО: возвращаем не больше запрошенного лимита
         return unique_results[:mr]
+
+    def _run_backends_parallel(self, order, query, per_backend_limit, lang_hint):
+        """Параллельный запуск бэкендов из order с агрегацией результатов.
+
+        Возвращает список SearchResult (без дедупликации — её делает вызывающий _search).
+        Падение одного бэкенда логируется и не влияет на остальные.
+        """
+        if not order:
+            return []
+
+        # Один бэкенд — без overhead на потоки, зовём напрямую.
+        if len(order) == 1:
+            b = order[0]
+            try:
+                r = self.backends[b].search(query, per_backend_limit, lang_hint)
+                return list(r) if r else []
+            except Exception as e:
+                logger.warning(f"Backend {b} failed: {e}")
+                return []
+
+        # Несколько бэкендов — запускаем параллельно через self._executor.
+        futures = {}
+        for b in order:
+            future = self._executor.submit(self._backend_search_safe, b, query, per_backend_limit, lang_hint)
+            futures[future] = b
+
+        aggregated = []
+        for future in as_completed(futures):
+            b = futures[future]
+            try:
+                r = future.result()
+            except Exception as e:
+                # _backend_search_safe уже залогировал — но защита от неожиданных исключений
+                logger.warning(f"Backend {b} future failed: {e}")
+                continue
+            if r:
+                aggregated.extend(r)
+        return aggregated
+
+    def _backend_search_safe(self, backend_name, query, per_backend_limit, lang_hint):
+        """Обёртка над backend.search() с поимкой исключений.
+        Возвращает list[SearchResult] или [] — никогда не бросает.
+        """
+        try:
+            r = self.backends[backend_name].search(query, per_backend_limit, lang_hint)
+            return list(r) if r else []
+        except Exception as e:
+            logger.warning(f"Backend {backend_name} failed: {e}")
+            return []
     
     def _rerank(self, query, results, top_k=20):
         if not results: return results
