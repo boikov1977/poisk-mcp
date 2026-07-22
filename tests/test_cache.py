@@ -36,17 +36,19 @@ def test_cache_expiry():
     assert c.get("pfx", "x") is None
 
 
-def test_cache_invalidate_prefix_broken():
-    """invalidate(prefix) сломан — ключи хешируются через MD5,
-    а проверка идёт по k.startswith(prefix). Оставляем тест как документацию бага."""
+def test_cache_invalidate_prefix():
+    """invalidate(prefix) корректно удаляет все записи с указанным prefix,
+    используя reverse-index _prefix_map (раньше это было сломано из-за MD5-хеширования ключей)."""
     c = TTLCache(max_size=10, ttl=60)
     c.set("search", [{"title": "A"}], "k1")
     c.set("search", [{"title": "B"}], "k2")
     c.set("other", "val", "k1")
     assert c.get("search", "k1") is not None
     c.invalidate("search")
-    # NOTE: из-за хеширования ключей invalidate prefix не сработает
-    # assert c.get("search", "k1") is None  — баг
+    # Все записи с prefix="search" должны быть удалены
+    assert c.get("search", "k1") is None
+    assert c.get("search", "k2") is None
+    # Записи с другим prefix остаются нетронутыми
     assert c.get("other", "k1") == "val"
 
 

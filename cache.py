@@ -2,7 +2,7 @@
 import time
 import threading
 import hashlib
-from typing import Any, Dict
+from typing import Any, Dict, List
 from collections import OrderedDict
 from config import config
 
@@ -10,6 +10,12 @@ class TTLCache:
     def __init__(self, max_size=1000, ttl=3600):
         self._cache: OrderedDict[str, Any] = OrderedDict()
         self._timestamps: Dict[str, float] = {}
+        # Reverse-index: human-readable prefix → список MD5-ключей.
+        # Нужен потому что _make_key() хеширует ключи и оригинальный prefix
+        # теряется, поэтому invalidate(prefix) не может работать через startswith.
+        self._prefix_map: Dict[str, List[str]] = {}
+        # Обратный мапинг key → prefix для O(1) удаления из _prefix_map.
+        self._key_prefix: Dict[str, str] = {}
         self._max_size = max_size
         self._ttl = ttl
         self._lock = threading.RLock()
@@ -43,25 +49,42 @@ class TTLCache:
         with self._lock:
             # Если ключ уже есть, удаляем старую запись (для обновления порядка)
             if key in self._cache:
-                del self._cache[key]
-            
+                self._remove_key(key)
+
             # Если кэш полон, удаляем самый старый (первый элемент)
             if len(self._cache) >= self._max_size:
                 self._evict_oldest()
-            
+
             self._cache[key] = value
             self._timestamps[key] = time.time()
+            # Поддерживаем reverse-index: prefix → список MD5-ключей.
+            # Дедуп: если ключ уже отслежен для этого prefix — не добавляем повторно.
+            bucket = self._prefix_map.setdefault(prefix, [])
+            if not bucket or bucket[-1] != key:
+                bucket.append(key)
+            self._key_prefix[key] = prefix
     
     def _remove_key(self, key):
-        # O(1) удаление из словаря
+        # O(1) удаление из словарей + поддержание reverse-index.
         self._cache.pop(key, None)
         self._timestamps.pop(key, None)
-    
+        prefix = self._key_prefix.pop(key, None)
+        if prefix is not None:
+            bucket = self._prefix_map.get(prefix)
+            if bucket is not None:
+                # O(n) по размеру bucket, но для типичных prefix-групп это мало.
+                try:
+                    bucket.remove(key)
+                except ValueError:
+                    pass
+                if not bucket:
+                    del self._prefix_map[prefix]
+
     def _evict_oldest(self):
-        # O(1) удаление первого элемента (FIFO/LRU)
+        # O(1) удаление первого элемента (FIFO/LRU).
         if self._cache:
             oldest_key, _ = self._cache.popitem(last=False)
-            self._timestamps.pop(oldest_key, None)
+            self._remove_key(oldest_key)
     
     def get_stats(self):
         total = self.stats["hits"] + self.stats["misses"]
@@ -73,9 +96,12 @@ class TTLCache:
             if prefix is None:
                 self._cache.clear()
                 self._timestamps.clear()
+                self._prefix_map.clear()
+                self._key_prefix.clear()
             else:
-                # Придется пройтись по ключам, но это редкая операция
-                keys_to_remove = [k for k in self._cache if k.startswith(prefix)]
+                # Используем reverse-index вместо k.startswith(prefix),
+                # т.к. ключи хешируются MD5 и оригинальный prefix в них не сохраняется.
+                keys_to_remove = list(self._prefix_map.get(prefix, []))
                 for k in keys_to_remove:
                     self._remove_key(k)
 
