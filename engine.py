@@ -34,6 +34,38 @@ class DiversityEngine:
         # MMR на текстовом сходстве (работает с любым encoder'ом)
         return self._text_diversify(results, target_count)
 
+    def _mmr_select(self, results, target_count, similarity_fn):
+        """Общий greedy MMR-выбор.
+
+        similarity_fn(idx, selected_indices) -> float: максимальная похожесть
+        элемента idx на любой из уже выбранных. Возвращает список выбранных индексов.
+        """
+        selected = [0]
+        remaining = list(range(1, len(results)))
+
+        while len(selected) < target_count and remaining:
+            best_score, best_idx = -float('inf'), None
+            for idx in remaining:
+                rel = results[idx].score
+                max_sim = similarity_fn(idx, selected)
+                mmr = self.lambda_param * rel - (1.0 - self.lambda_param) * max_sim
+                if mmr > best_score:
+                    best_score, best_idx = mmr, idx
+
+            if best_idx is not None:
+                selected.append(best_idx)
+                remaining.remove(best_idx)
+
+        return selected
+
+    @staticmethod
+    def _finalize(results, selected):
+        """Собираем выбранные результаты и пересчитываем rank."""
+        diversified = [results[i] for i in selected]
+        for i, r in enumerate(diversified):
+            r.rank = i + 1
+        return diversified
+
     def _text_diversify(self, results, target_count):
         """MMR на основе текстового сходства (Jaccard similarity).
         Работает без эмбеддингов — подходит для FlashRank cross-encoder."""
@@ -50,34 +82,20 @@ class DiversityEngine:
 
         tokens = [tokenize(t) for t in texts]
 
-        selected = [0]
-        remaining = list(range(1, len(results)))
+        def jaccard_similarity(idx, selected):
+            max_sim = 0.0
+            for sel in selected:
+                if not tokens[idx] or not tokens[sel]:
+                    continue
+                intersection = len(tokens[idx] & tokens[sel])
+                union = len(tokens[idx] | tokens[sel])
+                sim = intersection / union if union > 0 else 0.0
+                if sim > max_sim:
+                    max_sim = sim
+            return max_sim
 
-        while len(selected) < target_count and remaining:
-            best_score, best_idx = -float('inf'), None
-            for idx in remaining:
-                rel = results[idx].score
-                # Jaccard similarity с каждым выбранным — берём максимум
-                max_sim = 0.0
-                for sel in selected:
-                    if not tokens[idx] or not tokens[sel]:
-                        continue
-                    intersection = len(tokens[idx] & tokens[sel])
-                    union = len(tokens[idx] | tokens[sel])
-                    sim = intersection / union if union > 0 else 0.0
-                    max_sim = max(max_sim, sim)
-
-                mmr = self.lambda_param * rel - (1.0 - self.lambda_param) * max_sim
-                if mmr > best_score:
-                    best_score, best_idx = mmr, idx
-
-            if best_idx is not None:
-                selected.append(best_idx)
-                remaining.remove(best_idx)
-
-        diversified = [results[i] for i in selected]
-        for i, r in enumerate(diversified): r.rank = i+1
-        return diversified
+        selected = self._mmr_select(results, target_count, jaccard_similarity)
+        return self._finalize(results, selected)
 
     def _domain_mmr(self, results, target_count):
         """MMR на основе доменов. similarity=1 если домен совпадает, 0 иначе."""
@@ -85,26 +103,11 @@ class DiversityEngine:
 
         domains = [urlparse(r.url).netloc for r in results]
 
-        selected = [0]
-        remaining = list(range(1, len(results)))
+        def domain_similarity(idx, selected):
+            return 1.0 if any(domains[idx] == domains[sel] for sel in selected) else 0.0
 
-        while len(selected) < target_count and remaining:
-            best_score, best_idx = -float('inf'), None
-            for idx in remaining:
-                rel = results[idx].score
-                # similarity = 1 если домен уже есть среди выбранных
-                max_sim = 1.0 if any(domains[idx] == domains[sel] for sel in selected) else 0.0
-                mmr = self.lambda_param * rel - (1.0 - self.lambda_param) * max_sim
-                if mmr > best_score:
-                    best_score, best_idx = mmr, idx
-
-            if best_idx is not None:
-                selected.append(best_idx)
-                remaining.remove(best_idx)
-
-        diversified = [results[i] for i in selected]
-        for i, r in enumerate(diversified): r.rank = i+1
-        return diversified
+        selected = self._mmr_select(results, target_count, domain_similarity)
+        return self._finalize(results, selected)
 
 class SearchEngine:
     def __init__(self):
