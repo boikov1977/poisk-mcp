@@ -18,7 +18,6 @@ import config
 import json
 import logging
 import io
-import html
 import re
 import requests
 from datetime import datetime
@@ -57,7 +56,7 @@ from engine import SearchEngine
 from network import net, valid_url, safe_req, path_ok
 from cache import search_cache
 
-from tools import jina, extract, is_binary  # wmo removed (unused)
+from tools import jina, extract
 
 # MCP Server
 if MCP_AVAILABLE:

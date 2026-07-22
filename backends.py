@@ -138,6 +138,27 @@ class SearXNGBackend:
         self._availability_lock = threading.Lock()
 
     def _get_working_instance(self):
+        # Если пользователь явно указал кастомный URL — используем только его,
+        # без fallback на публичные INSTANCES.
+        if self.url:
+            try:
+                resp = self.session.get(self.url, timeout=5)
+                if resp.status_code == 200:
+                    with self._instance_lock:
+                        self._available_instance = self.url
+                    return self.url
+                raise RuntimeError(
+                    f"SearXNG: explicitly configured URL '{self.url}' "
+                    f"is not healthy (HTTP {resp.status_code})"
+                )
+            except RuntimeError:
+                raise
+            except Exception as e:
+                raise RuntimeError(
+                    f"SearXNG: explicitly configured URL '{self.url}' "
+                    f"is unreachable: {e}"
+                )
+
         # Сначала проверяем закэшированный инстанс (без блокировки)
         cached = self._available_instance
         if cached:

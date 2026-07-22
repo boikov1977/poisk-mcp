@@ -21,12 +21,6 @@ except Exception as e:
 
 TRANSFORMERS_AVAILABLE = FLASHRANK_AVAILABLE
 
-# Заглушка для cos_sim — не используется с cross-encoder, но engine.py импортирует util
-class DummyUtil:
-    def cos_sim(self, a, b):
-        return []
-util = DummyUtil()
-
 # Обновляем конфиг
 config.ENABLE_NEURAL_RERANK = FLASHRANK_AVAILABLE
 
