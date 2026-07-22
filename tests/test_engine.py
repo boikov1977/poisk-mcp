@@ -534,3 +534,132 @@ def test_search_backend_error_continues():
                     results, meta = se.search("hello", max_results=5)
                     assert len(results) >= 1
 
+
+# ════════════════════════════════════════════════════════════════
+#  Parallel search — проверка агрегации результатов из нескольких
+#  бэкендов, запущенных одновременно через ThreadPoolExecutor.
+# ════════════════════════════════════════════════════════════════
+
+def test_parallel_backends_aggregate_results():
+    """Два живых бэкенда — результаты агрегируются из обоих."""
+    from engine import SearchEngine
+    ddgs_result = _make_result("DDG", "http://ddg.com", 0.95)
+    searx_result = _make_result("SearXNG", "http://searx.com", 0.85)
+    with patch("engine.DuckDuckGoBackend") as MockDDGS:
+        with patch("engine.SearXNGBackend") as MockSearXNG:
+            with patch("engine.rate_limiter") as mock_rl:
+                with patch("engine.search_cache") as mock_cache:
+                    MockDDGS.return_value.is_available = True
+                    MockDDGS.return_value.search.return_value = [ddgs_result]
+                    MockSearXNG.return_value.is_available = True
+                    MockSearXNG.return_value.search.return_value = [searx_result]
+                    mock_rl.acquire.return_value = True
+                    mock_cache.get.return_value = None
+                    se = SearchEngine()
+                    results, meta = se.search("hello", max_results=5)
+                    urls = {r.url for r in results}
+                    assert "http://ddg.com" in urls
+                    assert "http://searx.com" in urls
+                    assert len(results) == 2
+
+
+def test_parallel_backends_single_backend_no_overhead():
+    """При одном доступном бэкенде _run_backends_parallel зовёт его напрямую,
+    без submit в executor (проверяем что не падает и возвращает результат)."""
+    from engine import SearchEngine
+    fake_result = _make_result("Solo", "http://solo.com", 0.9)
+    with patch("engine.DuckDuckGoBackend") as MockDDGS:
+        with patch("engine.SearXNGBackend") as MockSearXNG:
+            with patch("engine.rate_limiter") as mock_rl:
+                with patch("engine.search_cache") as mock_cache:
+                    MockDDGS.return_value.is_available = True
+                    MockDDGS.return_value.search.return_value = [fake_result]
+                    MockSearXNG.return_value.is_available = False
+                    mock_rl.acquire.return_value = True
+                    mock_cache.get.return_value = None
+                    se = SearchEngine()
+                    aggregated = se._run_backends_parallel(
+                        ["ddgs"], "hello", 10, None
+                    )
+                    assert len(aggregated) == 1
+                    assert aggregated[0].url == "http://solo.com"
+
+
+def test_parallel_multilingual_aggregates_languages():
+    """Multilingual search с несколькими языками агрегирует результаты
+    из всех языковых контекстов, запущенных параллельно."""
+    from engine import SearchEngine
+    r_ru = _make_result("RU", "http://ru.com", 0.9)
+    r_en = _make_result("EN", "http://en.com", 0.8)
+    r_zh = _make_result("ZH", "http://zh.com", 0.7)
+    with patch("engine.DuckDuckGoBackend") as MockDDGS:
+        with patch("engine.SearXNGBackend") as MockSearXNG:
+            with patch("engine.rate_limiter") as mock_rl:
+                with patch("engine.search_cache") as mock_cache:
+                    MockDDGS.return_value.is_available = True
+                    # Разные результаты для разных языковых регионов
+                    def mock_search(q, limit, lang):
+                        if lang and "ru" in lang:
+                            return [r_ru]
+                        if lang and "us" in lang:
+                            return [r_en]
+                        if lang and "cn" in lang:
+                            return [r_zh]
+                        return []
+                    MockDDGS.return_value.search.side_effect = mock_search
+                    MockSearXNG.return_value.is_available = False
+                    mock_rl.acquire.return_value = True
+                    mock_cache.get.return_value = None
+                    se = SearchEngine()
+                    results, meta = se.search(
+                        "test", languages=["ru", "en", "zh"], max_results=5
+                    )
+                    urls = {r.url for r in results}
+                    assert "http://ru.com" in urls
+                    assert "http://en.com" in urls
+                    assert "http://zh.com" in urls
+                    assert meta.get("languages") == ["ru", "en", "zh"]
+
+
+def test_parallel_multilingual_one_lang_fails_others_survive():
+    """Падение одного языкового контекста не должно ронять остальные.
+    Симулируем исключение для одного lang_hint через side_effect."""
+    from engine import SearchEngine
+    r_en = _make_result("EN", "http://en.com", 0.8)
+    with patch("engine.DuckDuckGoBackend") as MockDDGS:
+        with patch("engine.SearXNGBackend") as MockSearXNG:
+            with patch("engine.rate_limiter") as mock_rl:
+                with patch("engine.search_cache") as mock_cache:
+                    MockDDGS.return_value.is_available = True
+                    def mock_search(q, limit, lang):
+                        # ru-ru регион бросает — симулируем падение DDGS для ru
+                        if lang and "ru" in lang:
+                            raise RuntimeError("ru search crashed")
+                        if lang and "us" in lang:
+                            return [r_en]
+                        return []
+                    MockDDGS.return_value.search.side_effect = mock_search
+                    MockSearXNG.return_value.is_available = False
+                    mock_rl.acquire.return_value = True
+                    mock_cache.get.return_value = None
+                    se = SearchEngine()
+                    results, meta = se.search(
+                        "test", languages=["ru", "en"], max_results=5
+                    )
+                    # ru упал, но en вернул результат
+                    assert len(results) >= 1
+                    assert results[0].url == "http://en.com"
+
+
+def test_executor_initialized_in_init():
+    """SearchEngine.__init__ создаёт ThreadPoolExecutor для параллельного поиска."""
+    from engine import SearchEngine
+    from concurrent.futures import ThreadPoolExecutor
+    with patch("engine.DuckDuckGoBackend") as MockDDGS:
+        with patch("engine.SearXNGBackend") as MockSearXNG:
+            MockDDGS.return_value.is_available = False
+            MockSearXNG.return_value.is_available = False
+            se = SearchEngine()
+            assert isinstance(se._executor, ThreadPoolExecutor)
+            assert se._executor._max_workers == 6
+
