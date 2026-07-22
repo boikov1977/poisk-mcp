@@ -72,6 +72,11 @@ class _NeuralRerankerSingleton:
             cache_path = str(MODEL_CACHE_DIR / "flashrank")
             cls._model = Ranker(model_name=model_name, cache_dir=cache_path)
 
+            # Оптимизация ONNX Runtime — задействуем несколько CPU-потоков для инференса
+            num_threads = min(os.cpu_count() or 4, 4)
+            os.environ.setdefault("OMP_NUM_THREADS", str(num_threads))
+            os.environ.setdefault("ORT_NUM_THREADS", str(num_threads))
+
             load_time = time.time() - start_time
             cls._model_name = model_name
             cls._initialized = True
@@ -108,6 +113,8 @@ class _NeuralRerankerSingleton:
         if not self.is_available:
             raise RuntimeError("Model not loaded")
 
+        # Обрезаем тексты до ~1024 символов — FlashRank всё равно truncate'ит, а токенизация быстрее на коротких
+        texts = [t[:1024] for t in texts]
         passages = [{"id": i, "text": t} for i, t in enumerate(texts)]
         req = RerankRequest(query=query, passages=passages)
         result = self._model.rerank(req)
