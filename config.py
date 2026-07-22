@@ -62,9 +62,14 @@ def _setup_utf8():
 
 _setup_utf8()
 
-warnings.filterwarnings("ignore")
+# Точечное подавление warnings только для шумных библиотек
+# (глобальное "ignore" глушит DeprecationWarning, ResourceWarning и т.д.)
+warnings.filterwarnings("ignore", category=FutureWarning, module="transformers")
+warnings.filterwarnings("ignore", category=FutureWarning, module="huggingface_hub")
+warnings.filterwarnings("ignore", category=UserWarning, module="huggingface_hub")
+warnings.filterwarnings("ignore", category=FutureWarning, module="torch")
+warnings.filterwarnings("ignore", category=UserWarning, module="tqdm")
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
-os.environ["PYTHONWARNINGS"] = "ignore"
 os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = "30"
 
 # NOTE: ALL_PROXY больше не чистится глобально — это ломало SOCKS-прокси
